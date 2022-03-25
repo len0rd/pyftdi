@@ -644,7 +644,8 @@ class FtdiEeprom:
             return False
         self._ftdi.overwrite_eeprom(self._eeprom, dry_run=dry_run)
         if not dry_run:
-            eeprom = self._read_eeprom()
+            # if mirroring is enabled, read back the entire eeprom to verify
+            eeprom = self._read_eeprom(ignore_mirror=self.is_mirroring_enabled)
             if eeprom != self._eeprom:
                 pos = 0
                 for pos, (old, new) in enumerate(zip(self._eeprom, eeprom)):
@@ -796,13 +797,24 @@ class FtdiEeprom:
             return 0x40, True
         return 0x100, False
 
-    def _read_eeprom(self) -> bytes:
+    def _read_eeprom(self, ignore_mirror: bool=False) -> bytearray:
+        """
+        Return the current bytes on the physical eeprom
+
+        :param ignore_mirror: When False, if it is detected that the
+            device is mirrored, the first sector will be returned.
+            When True, if it is detected that the device is mirrored,
+            the entire eeprom will be returned (will look like 2 identical
+            sectors)
+        """
         buf = self._ftdi.read_eeprom(0, eeprom_size=self.size)
         eeprom = bytearray(buf)
-        size, mirror_detected = self._compute_size(eeprom)
-        if size < len(eeprom):
-            eeprom = eeprom[:size]
-        crc = self._compute_crc(eeprom, True)[0]
+        sector_size, mirror_detected = self._compute_size(eeprom)
+        should_trim = not mirror_detected or not ignore_mirror
+        if sector_size < len(eeprom) and should_trim:
+            eeprom = eeprom[:sector_size]
+        # ensure compute_crc is only provided one sector if eeprom is mirrored
+        crc = self._compute_crc(eeprom[:sector_size], True)[0]
         if crc:
             if self.is_empty:
                 self.log.info('No EEPROM or EEPROM erased')
